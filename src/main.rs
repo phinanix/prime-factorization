@@ -164,7 +164,7 @@ fn group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : &G, data: &(G::Data), n: 
   let x_bits = x.bits(); 
   dbg!(x);
   for bit_index in (0..x_bits-1).rev() {
-    dbg!(&bit_index, x.bit(bit_index));
+    // dbg!(&bit_index, x.bit(bit_index));
     // dbg!(&acc);
     acc = acc.double(data, n)?;
     if x.bit(bit_index) {
@@ -268,7 +268,7 @@ impl FactorGroup for WeierstrassPoint {
     fn finish(lam : BigInt, px: &BigInt, py: &BigInt, qx : &BigInt, n: &BigInt) -> WeierstrassPoint{
       let rx = (&lam).pow(2) - px - qx;
       let ry = lam * (&rx - px) + py;
-      Affine(pos_mod(rx,n), pos_mod(ry, n))
+      Affine(pos_mod(rx,n), pos_mod(-1 * ry, n))
     }
     match (self, rhs) {
       (Identity, rhs) => Ok(rhs.clone()), 
@@ -478,13 +478,12 @@ mod test {
      -> Result<G, BigInt> { 
       let mut acc = G::identity(data);
       for i in (0..x.try_into().unwrap()) {
-        dbg!(i);
         acc = acc.compose(pt, data, n)?;
       }
       Ok(acc)
      }
      //todo property test
-     let n = (107*7927).into();
+     let n = (79273*17393).into();
      let (curve, point) = WeierstrassCurve::create(&mut rand::thread_rng(),&n);
      let vals : [u32; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 50, 100, 103];
      for val in vals {
