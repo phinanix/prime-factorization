@@ -155,14 +155,40 @@ trait FactorGroup : Sized {
   }
 }
 
-fn group_pow<G: FactorGroup>(x: &BigUint, pt : G, data: &G::Data, n: &BigInt) -> Result<G, BigInt> { 
+fn group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : G, data: &(G::Data), n: &BigInt) -> Result<G, BigInt> { 
   // uses repeated exponentiation
-  todo!()
+  let mut acc = pt.clone(); 
+  let x_bits = x.bits(); 
+  dbg!(x);
+  for bit_index in (0..x_bits-1).rev() {
+    //dbg!(&bit);
+    acc = acc.double(data, n)?;
+    if x.bit(bit_index) {
+      acc = acc.compose(&pt, data, n)?;
+    }
+  }
+  Ok(acc)
 }
 
 trait EllipticCurve : Sized { 
   type Point : FactorGroup;
   fn create<R: Rng>(rng : &mut R, n: &BigInt) -> (Self, Self::Point);   
+}
+
+fn gcd_path(a: &BigInt, b: &BigInt) -> (BigInt, Vec<(BigInt, BigInt)>) {
+  // assumes a < b
+  assert!(a < b);
+  let mut path = vec![];
+  let mut larger = b.clone(); 
+  let mut smaller = a.clone();
+  while !Zero::is_zero(&smaller){
+    path.push((smaller.clone(), larger.clone()));
+    let q = &larger / &smaller; 
+    let r = larger - q * &smaller; 
+    larger = smaller;
+    smaller = r;
+  }
+  (larger, path)
 }
 
 fn invert_mod(x: &BigInt, n: &BigInt) -> Result<BigInt, BigInt> {
@@ -255,17 +281,35 @@ impl EllipticCurve for WeierstrassCurve {
 
 fn factorial(x: u64) -> BigUint {
   //use splitting in half strategy
-  todo!()
+  fn factorial_range(lower: u64, upper: u64) -> BigUint {
+    //lower and upper are both inclusive
+    if upper - lower < 10 {
+      let mut out = One::one();
+      for n in (lower..=upper) {
+        out *= n; 
+      }
+      out
+    } else {
+      let mid = (upper + lower) / 2;
+      factorial_range(lower, mid) * factorial_range(mid+1, upper)
+    }
+  }
+  factorial_range(1, x)
 }
 
-fn lenstra_factorization<G: FactorGroup>(n: &BigInt, b1: u64, curves: u32, seed: u64)
- -> Option<BigInt> {
+fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64) -> Option<BigInt> 
+ where G: FactorGroup<Data = C> + Clone, C: EllipticCurve<Point = G>
+{
   // returns a factor if found
   let mut rng : ChaCha8Rng = SeedableRng::seed_from_u64(seed);
   let b1_pow = factorial(b1);
   for _ in (0.. curves) {
     let (curve, point) : (G::Data, _) = EllipticCurve::create(&mut rng, n);
-    let b1_point = group_pow(&b1_pow, point, &curve: FactorGroup::Data, n);
+    let b1_point = match group_pow(&b1_pow, point, &curve, n) {
+      Err(factor) => return Some(factor), 
+      Ok(pt) => pt,
+    };
+
   }
   todo!()
 }
@@ -292,11 +336,13 @@ fn main() {
     let iter_limit = 10u64.checked_pow(10).unwrap();
     dbg!(&iter_limit);
     let ans = basic_factorize(num.clone().into(), iter_limit, seed);
-    let ecm_fac = lenstra_factorization::<WeierstrassCurve>(&(num.into()), 50, 50, 50);
+    let ecm_fac = lenstra_factorization::<WeierstrassPoint, WeierstrassCurve>(&(num.into()), 50, 50, 50);
     println!("ans was: {:?}", ans);
 }
 
 mod test {
+    use num_integer::gcd;
+
     use super::*;
 
   #[test]
@@ -351,4 +397,31 @@ mod test {
       assert!(!miller_rabin(&np.into(), 25), "{}", np);
     }
   }
+
+  #[test]
+  fn gcd_test() {
+    fn gcd_u64(a: i64, b : i64) -> i64 {
+      gcd_path(&a.into(), &b.into()).0.try_into().unwrap()
+    }
+    assert_eq!(gcd_u64(8, 64), 8);
+    assert_eq!(gcd_u64(8, 65), 1);
+    assert_eq!(gcd_u64(128, 130), 2);
+  }
+
+  #[test]
+  fn factorial_test() {
+    fn slow_factorial(x: u64) -> BigUint {
+      let mut acc = One::one();
+      for i in (1..=x) {
+        acc *= i
+      }
+      acc
+    }
+    let vals = [1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 50, 100, 103];
+    for val in vals {
+      assert_eq!(factorial(val), slow_factorial(val));
+    }
+  }
+
+  //todo: test Weierstrass satisfies group laws
 }
