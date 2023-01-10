@@ -1,9 +1,11 @@
 #![allow(unused)]
 use std::env;
+use std::fmt::Debug;
 
 use num_bigint::{BigUint, BigInt, ToBigInt, RandBigInt};
 use num_traits::{Zero, One, Signed, Pow};
 use num_integer::{Integer};
+
 
 fn trial_divide(n: &BigUint, limit: BigUint) -> Option<BigUint> {
   let mut divisor: BigUint = 3u8.into();
@@ -145,7 +147,7 @@ fn is_prime(n: &BigUint) -> bool {
 }
 
 
-trait FactorGroup : Sized {
+trait FactorGroup : Sized + Clone + Debug {
   type Data;
   fn identity(data: &Self::Data) -> Self; 
   fn invert(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt>; 
@@ -155,13 +157,15 @@ trait FactorGroup : Sized {
   }
 }
 
-fn group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : G, data: &(G::Data), n: &BigInt) -> Result<G, BigInt> { 
+fn group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : &G, data: &(G::Data), n: &BigInt)
+ -> Result<G, BigInt> { 
   // uses repeated exponentiation
   let mut acc = pt.clone(); 
   let x_bits = x.bits(); 
   dbg!(x);
   for bit_index in (0..x_bits-1).rev() {
-    //dbg!(&bit);
+    dbg!(&bit_index, x.bit(bit_index));
+    // dbg!(&acc);
     acc = acc.double(data, n)?;
     if x.bit(bit_index) {
       acc = acc.compose(&pt, data, n)?;
@@ -175,31 +179,55 @@ trait EllipticCurve : Sized {
   fn create<R: Rng>(rng : &mut R, n: &BigInt) -> (Self, Self::Point);   
 }
 
-fn gcd_path(a: &BigInt, b: &BigInt) -> (BigInt, Vec<(BigInt, BigInt)>) {
+fn gcd_path(a: &BigInt, b: &BigInt) -> (BigInt, Vec<(BigInt, BigInt, BigInt, BigInt)>) {
   // assumes a < b
   assert!(a < b);
   let mut path = vec![];
   let mut larger = b.clone(); 
   let mut smaller = a.clone();
   while !Zero::is_zero(&smaller){
-    path.push((smaller.clone(), larger.clone()));
     let q = &larger / &smaller; 
-    let r = larger - q * &smaller; 
+    let r = &larger - &q * &smaller; 
+    path.push((smaller.clone(), larger.clone(), q.clone(), r.clone()));
     larger = smaller;
     smaller = r;
   }
   (larger, path)
 }
 
+fn bezout(path: Vec<(BigInt, BigInt, BigInt, BigInt)>) -> (BigInt, BigInt) {
+  // given a vector of (a, b, q, r) calculates (x, y) st ax + by = d 
+  let mut x = Zero::zero(); 
+  let mut y = One::one(); 
+  for (a, b, q, r) in path.into_iter().rev() {
+    (x, y) = (y - &x * q, x);
+  }
+  (x, y)
+}
+
 fn invert_mod(x: &BigInt, n: &BigInt) -> Result<BigInt, BigInt> {
   /* returns Ok(x^-1) or Err(d) st d|n */
-  todo!()
+  // dbg!(&x, &n);
+  assert!(x > &Zero::zero() && x < n);
+  let (gcd, path) = gcd_path(x, n); 
+  if !One::is_one(&gcd) {return Err(gcd)};
+  let (b_x, b_y) = bezout(path);
+  return Ok(b_x);
+}
+
+fn pos_mod(x: BigInt, n: &BigInt) -> BigInt {
+  let m = x % n; 
+  if m >= Zero::zero() {
+    return m
+  } else {
+    return (m + n) % n
+  }
 }
 
 // y^2 = x^3 + ax + b (mod n)
 #[derive(Debug, Clone)]
 struct WeierstrassCurve{a: BigInt, b: BigInt} 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum WeierstrassPoint{
   Identity,
   Affine(BigInt, BigInt)
@@ -237,11 +265,10 @@ impl FactorGroup for WeierstrassPoint {
     P = Q and py != -qy => lam = (3 * px ^ 2 + A) / 2 * py & formula 1
     */
 
-    fn finish(lam : BigInt, px: &BigInt, py: &BigInt, qx : &BigInt) -> WeierstrassPoint{
+    fn finish(lam : BigInt, px: &BigInt, py: &BigInt, qx : &BigInt, n: &BigInt) -> WeierstrassPoint{
       let rx = (&lam).pow(2) - px - qx;
       let ry = lam * (&rx - px) + py;
-      todo!("mod rx and ry by n");
-      Affine(rx, ry)
+      Affine(pos_mod(rx,n), pos_mod(ry, n))
     }
     match (self, rhs) {
       (Identity, rhs) => Ok(rhs.clone()), 
@@ -250,12 +277,12 @@ impl FactorGroup for WeierstrassPoint {
         if px == qx {
           if *py == -1 * qy {return Ok(Identity)} 
           else {
-            let lam = (3 * px.pow(2) + a) * invert_mod(&(2 * py), n)?;
-            return Ok(finish(lam, px, py, qx));
+            let lam = (3 * px.pow(2) + a) * invert_mod(&pos_mod(2 * py, n), n)?;
+            return Ok(finish(lam, px, py, qx, n));
           }
         } else {
-          let lam = (qy - py) * invert_mod(&(qx - px), n)?; 
-          return Ok(finish(lam, px, py, qx));
+          let lam = (qy - py) * invert_mod(&pos_mod(qx - px, n), n)?; 
+          return Ok(finish(lam, px, py, qx, n));
         }
       }
     }
@@ -275,7 +302,7 @@ impl EllipticCurve for WeierstrassCurve {
     let px = rng.gen_bigint_range(&(2i8.into()), n);
     let py = rng.gen_bigint_range(&(2i8.into()), n);
     let b = (&py).pow(2) - (&px).pow(3) - &a * &px;
-    (WeierstrassCurve{a, b}, Affine(px, py))
+    (WeierstrassCurve{a, b: pos_mod(b, n)}, Affine(px, py))
   }
 }
 
@@ -305,7 +332,7 @@ fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64) -> 
   let b1_pow = factorial(b1);
   for _ in (0.. curves) {
     let (curve, point) : (G::Data, _) = EllipticCurve::create(&mut rng, n);
-    let b1_point = match group_pow(&b1_pow, point, &curve, n) {
+    let b1_point = match group_pow(&b1_pow, &point, &curve, n) {
       Err(factor) => return Some(factor), 
       Ok(pt) => pt,
     };
@@ -362,7 +389,7 @@ mod test {
 
   #[test]
   fn rho_finds_divisor_larger_semiprime() {
-    assert_eq!(rho_u32(7927*17393, 10000, 2), Some(7927));
+    assert_eq!(rho_u32(79273*17393, 10000, 2), Some(7927));
   }
 
   #[test]
@@ -408,6 +435,19 @@ mod test {
     assert_eq!(gcd_u64(128, 130), 2);
   }
 
+  #[test] 
+  fn bezout_test() {
+    let triples = [(8, 64, 8), (8, 65, 1), (128, 130, 2), (65, 138, 1)]
+      .map(|(a, b, d)|(a.into(), b.into(), d.into()));
+    for (a, b, d) in triples {
+      let (gcd, path) = gcd_path(&a, &b);
+      assert_eq!(d, gcd); 
+      let (x, y) = bezout(path);
+      //dbg!((&x, &y, &a, &b, &d));
+      assert_eq!(x * a + y * b, d);
+    }
+  }
+
   #[test]
   fn factorial_test() {
     fn slow_factorial(x: u64) -> BigUint {
@@ -423,5 +463,68 @@ mod test {
     }
   }
 
+  #[test] 
+  fn pos_mod_test() {
+    let triples = [(-3, 10, 7), (117, 11, 7), (63, 3, 0)]
+      .map(|(x, n, ans)|(x.into(), n.into(), ans.into()));
+    for (x, n, ans) in triples {
+      assert_eq!(pos_mod(x, &n), ans);
+    }
+  }
+
+  #[test] 
+  fn group_pow_test() {
+    fn slow_group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : &G, data: &(G::Data), n: &BigInt)
+     -> Result<G, BigInt> { 
+      let mut acc = G::identity(data);
+      for i in (0..x.try_into().unwrap()) {
+        dbg!(i);
+        acc = acc.compose(pt, data, n)?;
+      }
+      Ok(acc)
+     }
+     //todo property test
+     let n = (107*7927).into();
+     let (curve, point) = WeierstrassCurve::create(&mut rand::thread_rng(),&n);
+     let vals : [u32; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 50, 100, 103];
+     for val in vals {
+       assert_eq!(group_pow(&val.into(), &point, &curve, &n),
+        slow_group_pow(&val.into(), &point, &curve, &n))
+     }
+
+  }
+
+  #[test]
+  fn group_associative_test() {
+    let n = (41*59).into();
+    let (curve, point) = WeierstrassCurve::create(&mut rand::thread_rng(),&n);
+    dbg!(&curve, &point);
+    let two_point = point.compose(&point, &curve, &n).unwrap();
+    let three_point = two_point.compose(&point, &curve, &n).unwrap();
+    let four_point = three_point.compose(&point, &curve, &n).unwrap();
+    let two_two_point = two_point.compose(&two_point, &curve, &n).unwrap();
+    assert_eq!(four_point, two_two_point);
+  }
+
+  #[test]
+  fn weier_associative_repro() {
+    /*[src/main.rs:501] &curve = WeierstrassCurve {
+    a: 2078,
+    b: 648,
+    }
+    [src/main.rs:501] &point = Affine(
+        2131,
+        1105,
+    ) */
+    let n = (41*59).into();
+    let curve = WeierstrassCurve{a: 2078.into(), b: 648.into()};
+    let point = Affine(2131.into(),1105.into());
+    let two_point = point.compose(&point, &curve, &n).unwrap();
+    let three_point = two_point.compose(&point, &curve, &n).unwrap();
+    let four_point = three_point.compose(&point, &curve, &n).unwrap();
+    let two_two_point = two_point.compose(&two_point, &curve, &n).unwrap();
+    assert_eq!(four_point, two_two_point);
+
+  }
   //todo: test Weierstrass satisfies group laws
 }
