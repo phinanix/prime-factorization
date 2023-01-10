@@ -143,11 +143,140 @@ fn is_prime(n: &BigUint) -> bool {
   return miller_rabin(n, 25);
   // TODO: ppw test
 }
+
+
+trait FactorGroup : Sized {
+  type Data;
+  fn identity(data: &Self::Data) -> Self; 
+  fn invert(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt>; 
+  fn compose(&self, rhs: &Self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt>; 
+  fn double(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt> {
+    self.compose(self, data, n)
+  }
+}
+
+fn group_pow<G: FactorGroup>(x: &BigUint, pt : G, data: &G::Data, n: &BigInt) -> Result<G, BigInt> { 
+  // uses repeated exponentiation
+  todo!()
+}
+
+trait EllipticCurve : Sized { 
+  type Point : FactorGroup;
+  fn create<R: Rng>(rng : &mut R, n: &BigInt) -> (Self, Self::Point);   
+}
+
+fn invert_mod(x: &BigInt, n: &BigInt) -> Result<BigInt, BigInt> {
+  /* returns Ok(x^-1) or Err(d) st d|n */
+  todo!()
+}
+
+// y^2 = x^3 + ax + b (mod n)
+#[derive(Debug, Clone)]
+struct WeierstrassCurve{a: BigInt, b: BigInt} 
+#[derive(Debug, Clone)]
+enum WeierstrassPoint{
+  Identity,
+  Affine(BigInt, BigInt)
+} 
+
+use WeierstrassPoint::*;
+use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand_chacha::ChaCha8Rng;
+
+impl FactorGroup for WeierstrassPoint {
+  type Data = WeierstrassCurve;
+  fn identity(curve: &WeierstrassCurve) -> Self {
+    Identity
+  }
+
+  fn invert(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt> {
+    match self {
+      Identity => Ok(Identity),
+      Affine(x, y) => {
+        let neg_y = -1 * y;
+        Ok(Affine(x.clone(), neg_y))
+      }
+    }    
+  }
+
+  fn compose(&self, rhs: &Self, WeierstrassCurve { a, b }: &Self::Data, n: &BigInt) -> Result<Self, BigInt> {
+    /*
+    formula 1
+    rx = lam^2 - px - qx 
+    nu = py - lam * px 
+    ry = lam * rx + nu = lam * rx + py - lam * px = lam * (rx - px) + py 
+    cases: 
+    px != qx => lam = (qy - py) / (qx - px) & formula 1 
+    px == qx and py == -qy => 0
+    P = Q and py != -qy => lam = (3 * px ^ 2 + A) / 2 * py & formula 1
+    */
+
+    fn finish(lam : BigInt, px: &BigInt, py: &BigInt, qx : &BigInt) -> WeierstrassPoint{
+      let rx = (&lam).pow(2) - px - qx;
+      let ry = lam * (&rx - px) + py;
+      todo!("mod rx and ry by n");
+      Affine(rx, ry)
+    }
+    match (self, rhs) {
+      (Identity, rhs) => Ok(rhs.clone()), 
+      (lhs, Identity) => Ok(lhs.clone()), 
+      (Affine(px, py), Affine(qx, qy)) => {
+        if px == qx {
+          if *py == -1 * qy {return Ok(Identity)} 
+          else {
+            let lam = (3 * px.pow(2) + a) * invert_mod(&(2 * py), n)?;
+            return Ok(finish(lam, px, py, qx));
+          }
+        } else {
+          let lam = (qy - py) * invert_mod(&(qx - px), n)?; 
+          return Ok(finish(lam, px, py, qx));
+        }
+      }
+    }
+  }
+
+  fn double(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt> {
+    self.compose(self, data, n)
+  }
+  
+}
+
+impl EllipticCurve for WeierstrassCurve {
+  type Point = WeierstrassPoint;
+
+  fn create<R: Rng>(rng : &mut R, n: &BigInt) -> (Self, Self::Point) {
+    let a = rng.gen_bigint_range(&(2i8.into()), n);
+    let px = rng.gen_bigint_range(&(2i8.into()), n);
+    let py = rng.gen_bigint_range(&(2i8.into()), n);
+    let b = (&py).pow(2) - (&px).pow(3) - &a * &px;
+    (WeierstrassCurve{a, b}, Affine(px, py))
+  }
+}
+
+fn factorial(x: u64) -> BigUint {
+  //use splitting in half strategy
+  todo!()
+}
+
+fn lenstra_factorization<G: FactorGroup>(n: &BigInt, b1: u64, curves: u32, seed: u64)
+ -> Option<BigInt> {
+  // returns a factor if found
+  let mut rng : ChaCha8Rng = SeedableRng::seed_from_u64(seed);
+  let b1_pow = factorial(b1);
+  for _ in (0.. curves) {
+    let (curve, point) : (G::Data, _) = EllipticCurve::create(&mut rng, n);
+    let b1_point = group_pow(&b1_pow, point, &curve: FactorGroup::Data, n);
+  }
+  todo!()
+}
+
 /*
    todo: 
    2 primality tests
-     miller rabin
+     miller rabin (check)
      lucas
+   sqrt testing
+   large prime power testing
    ecm factorization 
     ellipic curve multiply
     other stuff
@@ -162,7 +291,8 @@ fn main() {
     println!("{:?}", &num);
     let iter_limit = 10u64.checked_pow(10).unwrap();
     dbg!(&iter_limit);
-    let ans = basic_factorize(num.into(), iter_limit, seed);
+    let ans = basic_factorize(num.clone().into(), iter_limit, seed);
+    let ecm_fac = lenstra_factorization::<WeierstrassCurve>(&(num.into()), 50, 50, 50);
     println!("ans was: {:?}", ans);
 }
 
@@ -185,7 +315,7 @@ mod test {
   }
 
   #[test]
-  fn rho_finds_larger_divisor() {
+  fn rho_finds_divisor_larger_semiprime() {
     assert_eq!(rho_u32(7927*17393, 10000, 2), Some(7927));
   }
 

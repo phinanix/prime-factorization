@@ -10,3 +10,4 @@ rand = "0.8"
 num-bigint = { version = "0.4", features = ["rand"] }
 num-traits = "0.2.15"
 num-integer = "0.1.45"
+rand_chacha = "0.3.1"
