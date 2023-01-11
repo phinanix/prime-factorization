@@ -12,7 +12,7 @@ fn trial_divide(n: &BigUint, limit: BigUint) -> Option<BigUint> {
   let two: BigUint = 2u8.into();
 
   while &divisor < &limit {
-    if n % &divisor == Zero::zero() {
+    if Zero::is_zero(&(n % &divisor)) {
       return Some(divisor)
     }
     divisor += &two;
@@ -146,6 +146,9 @@ fn is_prime(n: &BigUint) -> bool {
   // TODO: ppw test
 }
 
+//good: a + b 
+
+//bad: a.my_plus(b)
 
 trait FactorGroup : Sized + Clone + Debug {
   type Data;
@@ -157,12 +160,17 @@ trait FactorGroup : Sized + Clone + Debug {
   }
 }
 
+//x ^ (100101)_2 = 37_10
+//x ^ 10 = x * x 
+//x ^ 100 = (x ^ 10) * (x ^ 10)
+//x ^ 1001 = (x ^ 100) * (x ^ 100) * x
+
 fn group_pow<G: FactorGroup + Clone>(x: &BigUint, pt : &G, data: &(G::Data), n: &BigInt)
  -> Result<G, BigInt> { 
   // uses repeated exponentiation
   let mut acc = pt.clone(); 
   let x_bits = x.bits(); 
-  dbg!(x);
+  dbg!(x_bits);
   for bit_index in (0..x_bits-1).rev() {
     // dbg!(&bit_index, x.bit(bit_index));
     // dbg!(&acc);
@@ -225,6 +233,7 @@ fn pos_mod(x: BigInt, n: &BigInt) -> BigInt {
 }
 
 // y^2 = x^3 + ax + b (mod n)
+// b = y^2 - x^3 - ax
 #[derive(Debug, Clone)]
 struct WeierstrassCurve{a: BigInt, b: BigInt} 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +298,7 @@ impl FactorGroup for WeierstrassPoint {
   }
 
   fn double(&self, data: &Self::Data, n: &BigInt) -> Result<Self, BigInt> {
+    //TODO: make faster?
     self.compose(self, data, n)
   }
   
@@ -324,19 +334,21 @@ fn factorial(x: u64) -> BigUint {
   factorial_range(1, x)
 }
 
-fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64) -> Option<BigInt> 
- where G: FactorGroup<Data = C> + Clone, C: EllipticCurve<Point = G>
+fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64)
+ -> Option<BigInt> 
+ where G: FactorGroup<Data = C>, C: EllipticCurve<Point = G>
 {
   // returns a factor if found
   let mut rng : ChaCha8Rng = SeedableRng::seed_from_u64(seed);
   let b1_pow = factorial(b1);
   for _ in (0.. curves) {
     let (curve, point) : (G::Data, _) = EllipticCurve::create(&mut rng, n);
+    //phase 1
     let b1_point = match group_pow(&b1_pow, &point, &curve, n) {
       Err(factor) => return Some(factor), 
       Ok(pt) => pt,
     };
-
+    //todo implement phase 2
   }
   todo!()
 }
@@ -351,7 +363,9 @@ fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64) -> 
    ecm factorization 
     ellipic curve multiply
     other stuff
+    phase 2 
 
+  make tests not slow
  */
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -368,9 +382,9 @@ fn main() {
 }
 
 mod test {
-    use num_integer::gcd;
+  use num_integer::gcd;
 
-    use super::*;
+  use super::*;
 
   #[test]
   fn trial_divide_finds_divisor() {
@@ -389,7 +403,7 @@ mod test {
 
   #[test]
   fn rho_finds_divisor_larger_semiprime() {
-    assert_eq!(rho_u32(79273*17393, 10000, 2), Some(7927));
+    assert_eq!(rho_u32(79273*17393, 10000, 2), Some(17393));
   }
 
   #[test]
@@ -411,6 +425,34 @@ mod test {
     factors.sort();
     let i32_factors : Vec<i64> = factors.into_iter().map(|i|i.try_into().unwrap()).collect();
     assert_eq!(i32_factors, vec![7, 15485867, 15650309])
+  }
+
+  #[test]
+  fn lenstra_test() {
+    let prime_pairs = [(47,199), (17393,79273), (15485867i64,15650309i64)]; 
+    fn lenstra_wrapper(p: i64, q: i64) {
+      let p : BigInt = p.into();
+      let q : BigInt = q.into();
+      let n = &p * &q; 
+      match lenstra_factorization::<WeierstrassPoint, WeierstrassCurve>
+        (&n, 500, 30, 1234567) 
+      {
+        None => panic!("no factor of {} found", n),
+        Some(fac) => {
+          assert!(Zero::is_zero(&(&n % &fac)));
+          let other_fac = &n / &fac; 
+          if fac < other_fac {
+            assert_eq!((fac, other_fac), (p, q))
+          } else {
+            assert_eq!((other_fac, fac), (p, q))
+          }
+        }
+      }
+    }
+
+    for (p, q) in prime_pairs {
+      lenstra_wrapper(p, q);
+    }
   }
 
   #[test] 
@@ -500,7 +542,9 @@ mod test {
     dbg!(&curve, &point);
     let two_point = point.compose(&point, &curve, &n).unwrap();
     let three_point = two_point.compose(&point, &curve, &n).unwrap();
+    // four_point = (((x * x) * x) * x)
     let four_point = three_point.compose(&point, &curve, &n).unwrap();
+    // two_two_point = ((x * x) * (x * x))
     let two_two_point = two_point.compose(&two_point, &curve, &n).unwrap();
     assert_eq!(four_point, two_two_point);
   }
