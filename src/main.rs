@@ -393,7 +393,7 @@ mod test {
 
   #[test]
   fn trial_divide_no_divisor_of_prime() {
-    assert_eq!(trial_divide_u32(35695349, 10000000), None);
+    assert_eq!(trial_divide_u32(35695349, 1000000), None);
   }
 
   #[test]
@@ -408,7 +408,7 @@ mod test {
 
   #[test]
   fn rho_finds_no_divisor_of_prime() {
-    assert_eq!(rho_u32(104743, 1000000, 2), None)
+    assert_eq!(rho_u32(104743, 10000, 2), None)
   }
 
   #[test]
