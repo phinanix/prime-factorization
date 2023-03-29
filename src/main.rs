@@ -3,25 +3,27 @@ use std::env;
 use std::fmt::Debug;
 
 use num_bigint::{BigUint, BigInt, ToBigInt, RandBigInt};
-use num_traits::{Zero, One, Signed, Pow};
+use num_traits::{Zero, One, Signed, Pow, ToPrimitive};
 use num_integer::{Integer};
 
 
-fn trial_divide(n: &BigUint, limit: BigUint) -> Option<BigUint> {
+fn trial_divide(n: &BigUint, limit: &BigUint) -> Option<BigUint> {
   let mut divisor: BigUint = 3u8.into();
-  let two: BigUint = 2u8.into();
-
+  let two = 2u8;
+  if Zero::is_zero(&(n % two)) {
+    return Some(two.into()); 
+  }
   while &divisor < &limit {
     if Zero::is_zero(&(n % &divisor)) {
       return Some(divisor)
     }
-    divisor += &two;
+    divisor += two;
   }
   return None
 }
 
 fn trial_divide_u32(n: u32, limit: u32) -> Option<u32> {
-  match trial_divide(&n.into(), limit.into()) {
+  match trial_divide(&n.into(), &limit.into()) {
     None => None, 
     Some(big_int) => match big_int.try_into() {
       Err(_) => panic!("answer too large"),
@@ -68,7 +70,7 @@ fn pollard_rho(n: BigInt, iters: u64, seed_or_start: SeedOrRhoState)
 fn basic_factorize(mut n: BigInt, iters: u64, mut seed: u64) -> Vec<BigInt> {
   let mut out = vec![];
   while let Some(divisor) = trial_divide(&n.clone().try_into().unwrap(), 
-    1000000u32.into()) {
+    &1000000u32.into()) {
       let idiv : BigInt = divisor.into();
       n = n / &idiv;
       out.push(idiv);
@@ -110,6 +112,7 @@ fn extract_2s(n: &BigUint) -> (BigUint, u32) {
 }
 
 fn miller_rabin(n: &BigUint, rounds: u32) -> bool {
+  dbg!(&n);
   let mut rng = rand::thread_rng(); 
   let n_m1 = n-1u8;
   let (odd_base, num_twos) = extract_2s(&n_m1);
@@ -138,10 +141,12 @@ fn miller_rabin(n: &BigUint, rounds: u32) -> bool {
 }
 
 fn is_prime(n: &BigUint) -> bool {
-  match trial_divide(n, 10000u32.into()) {
-    Some(_) => return false, 
+  let td_limit = 10000u32.into();
+  match trial_divide(n, &td_limit) {
+    Some(d) => {if d < *n {return false}}, 
     None => (),
   }
+  if n < &td_limit.pow(2u8) {return true}
   return miller_rabin(n, 25);
   // TODO: ppw test
 }
@@ -338,8 +343,10 @@ fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64)
  -> Option<BigInt> 
  where G: FactorGroup<Data = C>, C: EllipticCurve<Point = G>
 {
+  dbg!(b1, curves);
   // returns a factor if found
   let mut rng : ChaCha8Rng = SeedableRng::seed_from_u64(seed);
+  //TODO factorial is not optimal 
   let b1_pow = factorial(b1);
   for _ in (0.. curves) {
     let (curve, point) : (G::Data, _) = EllipticCurve::create(&mut rng, n);
@@ -350,9 +357,54 @@ fn lenstra_factorization<G, C> (n: &BigInt, b1: u64, curves: u32, seed: u64)
     };
     //todo implement phase 2
   }
-  todo!()
+  return None
 }
 
+fn factorize_with_ecm<G, C> (n: &BigInt, 
+  smallest_factor_digits: u32, largest_factor_digits: u32, 
+  rng: &mut ChaCha8Rng, verbose: bool) -> Option<BigInt> 
+  where G: FactorGroup<Data = C>, C: EllipticCurve<Point = G>
+  {
+    //drives lenstra_factorization via slowly increasing b1 and curves until a 
+    //factor is found
+    if verbose {
+      println!("begin-ing to factor {} using ECM", n);
+    }
+    let goal_factor_digits = smallest_factor_digits; 
+    for goal_factor_digits in 
+      (smallest_factor_digits..=largest_factor_digits).step_by(5) 
+    {
+      //magic numbers determined from GMP-ECM
+      let b1 : f64 = 3.7f64.pow(goal_factor_digits.to_f64().unwrap().pow(0.666));
+      let curves : f64 = 1.6f64.pow(goal_factor_digits.to_f64().unwrap().pow(0.75));
+      if verbose {
+        println!("looking for {} digits with b1={} and curves={}", goal_factor_digits, b1, curves);
+      }
+      match lenstra_factorization::<G, C>(n, b1.to_u64().unwrap(), curves.to_u32().unwrap(), rng) {
+        Some(factor) => return Some(factor),
+        None => (),
+      }
+    }
+    return None
+}
+
+fn random_prime_of_size(digits : u32, rng: &mut ChaCha8Rng) -> BigUint {
+  let ten : BigUint = 10u8.into();
+  let lower_bound = ten.pow(digits-1); 
+  let mut candidate = lower_bound.clone();
+  //
+  
+  while !is_prime(&candidate) {
+    candidate = rng.gen_biguint_range(&lower_bound, &(&lower_bound * 10u8));
+  }
+  return candidate
+}
+
+fn benchmark(prime_digits: Vec<u32>, total_digits: u32, rng: &mut ChaCha8Rng) {
+ let prime_pairs = prime_digits.into_iter()
+  .map(|d|(random_prime_of_size(d, rng), random_prime_of_size(total_digits - d, rng))); 
+  todo!()
+}
 /*
    todo: 
    2 primality tests
@@ -383,6 +435,7 @@ fn main() {
 
 mod test {
   use num_integer::gcd;
+use rand::random;
 
   use super::*;
 
@@ -427,9 +480,11 @@ mod test {
     assert_eq!(i32_factors, vec![7, 15485867, 15650309])
   }
 
+
+  //todo: benchmark that factors a series of larger primes 
   #[test]
   fn lenstra_test() {
-    let prime_pairs = [(47,199), (17393,79273), (15485867i64,15650309i64)]; 
+    let prime_pairs = [(15485867i64,15650309i64)];  //[(47,199), (17393,79273), (15485867i64,15650309i64)]; 
     fn lenstra_wrapper(p: i64, q: i64) {
       let p : BigInt = p.into();
       let q : BigInt = q.into();
@@ -465,6 +520,19 @@ mod test {
     for np in not_primes {
       assert!(!miller_rabin(&np.into(), 25), "{}", np);
     }
+  }
+
+  #[test]
+  fn is_prime_test() {
+    let primes : [u32; 8] = [2, 41, 277, 30869, 1093889, 1992769, 3450749, 4256233];
+    let not_primes : [u32; 10] = [95, 100, 3285, 34341, 66623, 12222, 67841, 330501, 974689, 56432932];
+    for p in primes {
+      assert!(is_prime(&p.into()), "{}", p);
+    }
+    for np in not_primes {
+      assert!(!is_prime(&np.into()), "was prime: {}", np);
+    }
+
   }
 
   #[test]
@@ -570,4 +638,22 @@ mod test {
 
   }
   //todo: test Weierstrass satisfies group laws
+
+  #[test]
+  fn test_random_prime() {
+    let p = random_prime_of_size(2, 1234);
+    assert_eq!(p, 59u8.into())
+  }
+
+  #[test]
+  fn test_factorize_with_ecm() {
+    let seed = 1234;
+    let mut rng : ChaCha8Rng = SeedableRng::seed_from_u64(seed);
+    let p = random_prime_of_size(8, &mut rng); 
+    dbg!(&p);
+    let q = random_prime_of_size(30, &mut rng);
+    let ans = factorize_with_ecm::<WeierstrassPoint, WeierstrassCurve>
+      (&((&p*q).to_bigint().unwrap()), 5, 15, &mut rng, false);
+    assert_eq!(ans.unwrap(), p.to_bigint().unwrap()); 
+  }
 }
